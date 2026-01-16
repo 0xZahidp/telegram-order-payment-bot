@@ -246,6 +246,10 @@ async def finalize_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
     order_service: OrderService = context.bot_data["order_service"]
     admin_service: AdminService = context.bot_data["admin_service"]
 
+    # 🔥 FIX: DEFINE THESE
+    telegram_username = f"@{user.username}" if user.username else "N/A"
+    telegram_name = user.full_name or user.first_name or "Unknown"
+
     # -------------------------
     # CREATE ORDER
     # -------------------------
@@ -254,7 +258,8 @@ async def finalize_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
     order_payload = {
         "Order ID": order_id,
         "Telegram ID": str(user.id),
-        "Telegram Username": f"@{user.username}" if user.username else "N/A",
+        "Telegram Username": telegram_username,
+        "Telegram Name": telegram_name,
         "Order Text": context.user_data.get("order_text", ""),
         "Payment Method": context.user_data.get("payment_method", ""),
         "Receiver Name": context.user_data.get("receiver_name", ""),
@@ -269,14 +274,15 @@ async def finalize_order(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # NOTIFY ADMINS (SAFE)
     # -------------------------
     admin_message = (
-        "📦 *New Order Submitted*\n\n"
-        f"🆔 Order ID: `{order_id}`\n"
-        f"👤 User ID: `{user.id}`\n"
-        f"👤 Username: @{user.username or 'N/A'}\n"
-        f"💳 Payment Method: {order_payload['Payment Method']}\n"
-        f"🚚 Carrier: {order_payload['Carrier']}\n\n"
-        f"📝 Order Details:\n{order_payload['Order Text']}"
-    )
+    "📦 *New Order Submitted*\n\n"
+    f"🆔 Order ID: `{order_id}`\n"
+    f"👤 User: [{telegram_name}](tg://user?id={user.id})\n"
+    f"🆔 User ID: `{user.id}`\n"
+    f"💳 Payment Method: {order_payload['Payment Method']}\n"
+    f"🚚 Carrier: {order_payload['Carrier']}\n\n"
+    f"📝 Order Details:\n{order_payload['Order Text']}"
+)
+
 
     admins = admin_service.get_active_admins()
 
@@ -353,7 +359,10 @@ btc_conv = ConversationHandler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, collect_btc_txid)
         ],
     },
-    fallbacks=[],
+    fallbacks=[
+        CallbackQueryHandler(start_btc_payment, pattern=f"^{CB_PAY_BTC}(?::.*)?$")
+    ],
+    allow_reentry=True,   # 🔥 THIS LINE FIXES FREEZE
 )
 
 eth_conv = ConversationHandler(
@@ -369,7 +378,10 @@ eth_conv = ConversationHandler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, collect_eth_txid)
         ],
     },
-    fallbacks=[],
+    fallbacks=[
+        CallbackQueryHandler(start_eth_payment, pattern=f"^{CB_PAY_ETH}(?::.*)?$")
+    ],
+    allow_reentry=True,   # 🔥 THIS LINE FIXES FREEZE
 )
 
 usdt_conv = ConversationHandler(
@@ -385,7 +397,10 @@ usdt_conv = ConversationHandler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, collect_usdt_txid)
         ],
     },
-    fallbacks=[],
+    fallbacks=[
+        CallbackQueryHandler(start_usdt_payment, pattern=f"^{CB_PAY_USDT}(?::.*)?$")
+    ],
+    allow_reentry=True,   # 🔥 THIS LINE FIXES FREEZE
 )
 
 # =====================================================

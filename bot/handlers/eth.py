@@ -9,7 +9,6 @@ from telegram.error import BadRequest, Forbidden
 from bot.utils.constants import *
 from bot.services.order_service import OrderService
 from bot.services.admin_service import AdminService
-from config.settings import Settings
 
 import re
 
@@ -18,10 +17,7 @@ import re
 # TXID VALIDATION (ETH HEX OR ETHERSCAN LINK)
 # =====================================================
 TXID_HEX_REGEX = re.compile(r"^0x[a-fA-F0-9]{64}$")
-TXID_URL_REGEX = re.compile(
-    r"(etherscan\.io)",
-    re.IGNORECASE,
-)
+TXID_URL_REGEX = re.compile(r"(etherscan\.io)", re.IGNORECASE)
 
 
 def extract_txid(text: str) -> str | None:
@@ -37,11 +33,15 @@ def extract_txid(text: str) -> str | None:
 
 
 # =====================================================
-# START ETH PAYMENT
+# START ETH PAYMENT (SAFE RESTART)
 # =====================================================
 async def start_eth_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+
+    # 🔥 IMPORTANT: clear any previous unfinished ETH session
+    context.user_data.pop("eth_payment", None)
+    context.user_data.pop("order_id", None)
 
     await query.message.reply_text(
         "Ξ *ETH Payment*\n\n"
@@ -76,7 +76,7 @@ async def collect_eth_order_id(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 # =====================================================
-# COLLECT SUBTOTAL (✅ 3% ETH FEE ADDED)
+# COLLECT SUBTOTAL (LIVE SETTINGS – NO CACHE)
 # =====================================================
 async def collect_eth_subtotal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -87,10 +87,20 @@ async def collect_eth_subtotal(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("❌ Please enter a valid USD amount.")
         return STATE_ETH_SUBTOTAL
 
-    settings: Settings = context.bot_data["settings"]
-    eth_wallet = settings.ETH_WALLET
+    settings_service = context.bot_data["settings_service"]
 
-    fee = round(subtotal * (settings.ETH_FEE_PERCENT / 100), 2)
+    eth_wallet = settings_service.get("ETH_WALLET")
+    eth_fee_percent = settings_service.get("ETH_FEE_PERCENT")
+
+    if not eth_wallet or not eth_fee_percent:
+        await update.message.reply_text(
+            "❌ ETH payments are temporarily unavailable.\n"
+            "Please contact support.",
+            parse_mode="Markdown",
+        )
+        return ConversationHandler.END
+
+    fee = round(subtotal * (float(eth_fee_percent) / 100), 2)
     total = round(subtotal + fee, 2)
 
     context.user_data["eth_payment"] = {
@@ -154,13 +164,16 @@ async def collect_eth_txid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     payment = context.user_data.get("eth_payment")
 
     if not order_id or not payment:
-        await update.message.reply_text("❌ Session expired. Please start again.")
+        await update.message.reply_text(
+            "❌ Session expired. Please start again.",
+            parse_mode="Markdown",
+        )
         return ConversationHandler.END
 
     order_service: OrderService = context.bot_data["order_service"]
     admin_service: AdminService = context.bot_data["admin_service"]
 
-    # ✅ Save ETH payment with fee breakdown
+    # ✅ Save ETH payment
     order_service.create_eth_payment({
         "Order ID": order_id,
         "Subtotal USD": payment["Subtotal USD"],
@@ -210,4 +223,3 @@ async def collect_eth_txid(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data.clear()
     return ConversationHandler.END
-# =====================================================

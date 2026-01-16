@@ -9,7 +9,6 @@ from telegram.error import BadRequest, Forbidden
 from bot.utils.constants import *
 from bot.services.order_service import OrderService
 from bot.services.admin_service import AdminService
-from config.settings import Settings
 
 import re
 
@@ -37,11 +36,15 @@ def extract_txid(text: str) -> str | None:
 
 
 # =====================================================
-# START BTC PAYMENT
+# START BTC PAYMENT (SAFE RESTART)
 # =====================================================
 async def start_btc_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+
+    # 🔥 Clear any unfinished BTC session
+    context.user_data.pop("btc_payment", None)
+    context.user_data.pop("order_id", None)
 
     await query.message.reply_text(
         "₿ *BTC Payment*\n\n"
@@ -56,7 +59,6 @@ async def start_btc_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =====================================================
 async def collect_btc_order_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     order_id = update.message.text.strip()
-
     order_service: OrderService = context.bot_data["order_service"]
 
     if not order_service.order_exists(order_id):
@@ -78,7 +80,7 @@ async def collect_btc_order_id(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 # =====================================================
-# COLLECT SUBTOTAL
+# COLLECT SUBTOTAL (LIVE SETTINGS)
 # =====================================================
 async def collect_btc_subtotal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -89,15 +91,27 @@ async def collect_btc_subtotal(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("❌ Please enter a valid USD amount.")
         return STATE_BTC_SUBTOTAL
 
-    settings: Settings = context.bot_data["settings"]
+    settings_service = context.bot_data["settings_service"]
 
-    fee = round(subtotal * (settings.BTC_FEE_PERCENT / 100), 2)
+    btc_wallet = settings_service.get("BTC_WALLET")
+    btc_fee_percent = settings_service.get("BTC_FEE_PERCENT")
+
+    if not btc_wallet or not btc_fee_percent:
+        await update.message.reply_text(
+            "❌ BTC payments are temporarily unavailable.\n"
+            "Please contact support.",
+            parse_mode="Markdown",
+        )
+        return ConversationHandler.END
+
+    fee = round(subtotal * (float(btc_fee_percent) / 100), 2)
     total = round(subtotal + fee, 2)
 
     context.user_data["btc_payment"] = {
         "Subtotal USD": subtotal,
         "BTC Fee USD": fee,
         "Total USD": total,
+        "BTC Wallet": btc_wallet,
     }
 
     await update.message.reply_text(
@@ -105,11 +119,9 @@ async def collect_btc_subtotal(update: Update, context: ContextTypes.DEFAULT_TYP
         f"🆔 Order ID: `{context.user_data['order_id']}`\n"
         f"*Total to Send:* {total} USD\n\n"
         f"📥 *BTC Wallet: (Tap on address to copy)*\n"
-        f"`{settings.BTC_WALLET}`\n\n"
+        f"`{btc_wallet}`\n\n"
         "⚠️ Network fees are paid by sender.\n\n"
         "📌 Send BTC and reply with *TXID only*\n"
-        "Example:\n"
-        "`4e3f2a1b0c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d`\n"
         "or scanner link.\n\n"
         "❌ Do NOT send screenshots or media.",
         parse_mode="Markdown",
@@ -154,12 +166,14 @@ async def collect_btc_txid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     order_id = context.user_data.get("order_id")
 
     if not payment or not order_id:
-        await update.message.reply_text("❌ Session expired. Please start again.")
+        await update.message.reply_text(
+            "❌ Session expired. Please start again.",
+            parse_mode="Markdown",
+        )
         return ConversationHandler.END
 
     order_service: OrderService = context.bot_data["order_service"]
     admin_service: AdminService = context.bot_data["admin_service"]
-    settings: Settings = context.bot_data["settings"]
 
     # ✅ Save BTC payment
     order_service.create_btc_payment({
@@ -167,13 +181,13 @@ async def collect_btc_txid(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Subtotal USD": payment["Subtotal USD"],
         "BTC Fee USD": payment["BTC Fee USD"],
         "Total USD": payment["Total USD"],
-        "BTC Wallet": settings.BTC_WALLET,
+        "BTC Wallet": payment["BTC Wallet"],
         "TXID": txid,
         "Status": "Pending",
     })
 
     # =================================================
-    # 🔔 NOTIFY ALL ADMINS (SAFE)
+    # 🔔 NOTIFY ADMINS
     # =================================================
     admin_message = (
         "₿ New BTC Payment Submitted\n\n"
@@ -200,9 +214,6 @@ async def collect_btc_txid(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"Admin notify failed ({admin_id}): {e}"
             )
 
-    # =================================================
-    # ✅ CONFIRM USER
-    # =================================================
     from bot.handlers.user import build_main_menu
 
     await update.message.reply_text(

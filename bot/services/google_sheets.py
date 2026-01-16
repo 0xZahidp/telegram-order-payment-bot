@@ -7,14 +7,14 @@ class GoogleSheetsService:
     """
     Central Google Sheets service.
     Handles auth, read, append, update.
-    Backward-compatible with all services.
+    Fresh spreadsheet access on every operation
+    to avoid stale data in long-running bots.
     """
 
     def __init__(self, sheet_id: str, service_account_path: str):
         self.sheet_id = sheet_id
         self.service_account_path = service_account_path
         self.client = self._authorize()
-        self.spreadsheet = self.client.open_by_key(self.sheet_id)
 
     # =====================================================
     # AUTH
@@ -33,20 +33,25 @@ class GoogleSheetsService:
         return gspread.authorize(credentials)
 
     # =====================================================
+    # INTERNAL: ALWAYS GET FRESH WORKSHEET
+    # =====================================================
+    def _get_worksheet(self, sheet_name: str):
+        spreadsheet = self.client.open_by_key(self.sheet_id)
+        return spreadsheet.worksheet(sheet_name)
+
+    # =====================================================
     # READ (DICT BASED)
     # =====================================================
     def read_sheet(self, sheet_name: str) -> List[Dict[str, Any]]:
         """
         Reads a sheet and returns list of dicts using header row.
+        Always fresh.
         """
-        worksheet = self.spreadsheet.worksheet(sheet_name)
+        worksheet = self._get_worksheet(sheet_name)
         return worksheet.get_all_records() or []
 
     # ✅ BACKWARD COMPATIBILITY
     def get_rows(self, sheet_name: str) -> List[Dict[str, Any]]:
-        """
-        Alias for read_sheet()
-        """
         return self.read_sheet(sheet_name)
 
     # =====================================================
@@ -55,8 +60,9 @@ class GoogleSheetsService:
     def get_values(self, sheet_name: str) -> List[List[Any]]:
         """
         Reads raw values (rows) from a sheet.
+        Always fresh.
         """
-        worksheet = self.spreadsheet.worksheet(sheet_name)
+        worksheet = self._get_worksheet(sheet_name)
         return worksheet.get_all_values() or []
 
     # =====================================================
@@ -65,8 +71,9 @@ class GoogleSheetsService:
     def append_row(self, sheet_name: str, row: Dict[str, Any]) -> None:
         """
         Appends a row using column headers order.
+        Always fresh.
         """
-        worksheet = self.spreadsheet.worksheet(sheet_name)
+        worksheet = self._get_worksheet(sheet_name)
         headers = worksheet.row_values(1)
 
         # Auto-create header if empty
@@ -88,8 +95,9 @@ class GoogleSheetsService:
     ) -> None:
         """
         Updates specific columns in a given row index (1-based).
+        Always fresh.
         """
-        worksheet = self.spreadsheet.worksheet(sheet_name)
+        worksheet = self._get_worksheet(sheet_name)
         headers = worksheet.row_values(1)
 
         for column_name, new_value in updates.items():
@@ -100,17 +108,17 @@ class GoogleSheetsService:
             worksheet.update_cell(row_index, col_index, new_value)
 
     # =====================================================
-    # UPDATE FULL SHEET (🔥 REQUIRED)
+    # UPDATE FULL SHEET
     # =====================================================
     def update(self, sheet_name: str, rows: List[Dict[str, Any]]) -> None:
         """
         Replaces entire sheet content using dict rows.
-        Used by AdminService disable logic.
+        Always fresh.
         """
-        worksheet = self.spreadsheet.worksheet(sheet_name)
-
         if not rows:
             return
+
+        worksheet = self._get_worksheet(sheet_name)
 
         headers = list(rows[0].keys())
         values = [headers]
@@ -132,9 +140,9 @@ class GoogleSheetsService:
     ) -> Optional[int]:
         """
         Finds first row index where column == value.
-        Returns row index or None.
+        Always fresh.
         """
-        worksheet = self.spreadsheet.worksheet(sheet_name)
+        worksheet = self._get_worksheet(sheet_name)
         headers = worksheet.row_values(1)
 
         if column_name not in headers:

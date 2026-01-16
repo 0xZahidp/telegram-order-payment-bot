@@ -46,8 +46,14 @@ class MenuService:
                 if not name or not price_raw:
                     continue
 
-                # Clean price (remove $ if present)
-                price_clean = price_raw.replace("$", "").strip()
+                # 🔥 FIX: clean price properly (remove $ AND commas)
+                price_clean = (
+                    price_raw
+                    .replace("$", "")
+                    .replace(",", "")
+                    .strip()
+                )
+
                 base_price = float(price_clean)
 
                 # Apply markup
@@ -59,7 +65,7 @@ class MenuService:
                 grouped[category].append((name, client_price))
 
             except Exception:
-                # Skip malformed rows safely
+                # Skip malformed rows safely (no behavior change)
                 continue
 
         if not grouped:
@@ -77,9 +83,7 @@ class MenuService:
 
             for name, price in items:
                 # Format price as $525 or $525.5
-                formatted_price = (
-                    int(price) if price.is_integer() else price
-                )
+                formatted_price = int(price) if price.is_integer() else price
                 line = f"• *{name}* — ${formatted_price}\n"
                 section += line
 

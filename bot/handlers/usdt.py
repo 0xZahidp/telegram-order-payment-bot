@@ -9,7 +9,6 @@ from telegram.error import BadRequest, Forbidden
 from bot.utils.constants import *
 from bot.services.order_service import OrderService
 from bot.services.admin_service import AdminService
-from config.settings import Settings
 
 import re
 
@@ -37,11 +36,15 @@ def extract_txid(text: str) -> str | None:
 
 
 # =====================================================
-# START USDT PAYMENT
+# START USDT PAYMENT (SAFE RESTART)
 # =====================================================
 async def start_usdt_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+
+    # 🔥 Clear any unfinished USDT session
+    context.user_data.pop("usdt_payment", None)
+    context.user_data.pop("order_id", None)
 
     await query.message.reply_text(
         "💎 *USDT Payment (ERC20)*\n\n"
@@ -77,7 +80,7 @@ async def collect_usdt_order_id(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 # =====================================================
-# COLLECT SUBTOTAL (✅ 3% USDT FEE ADDED)
+# COLLECT SUBTOTAL (LIVE SETTINGS)
 # =====================================================
 async def collect_usdt_subtotal(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -91,15 +94,16 @@ async def collect_usdt_subtotal(update: Update, context: ContextTypes.DEFAULT_TY
     settings_service = context.bot_data["settings_service"]
 
     usdt_wallet = settings_service.get("USDT_WALLET")
-    fee_percent = float(settings_service.get("USDT_FEE_PERCENT", 3))
+    fee_percent = settings_service.get("USDT_FEE_PERCENT", 3)
 
     if not usdt_wallet:
         await update.message.reply_text(
-            "❌ USDT wallet is not configured. Please contact admin."
+            "❌ USDT wallet is not configured. Please contact admin.",
+            parse_mode="Markdown",
         )
         return ConversationHandler.END
 
-    fee = round(subtotal * (fee_percent / 100), 2)
+    fee = round(subtotal * (float(fee_percent) / 100), 2)
     total = round(subtotal + fee, 2)
 
     context.user_data["usdt_payment"] = {
@@ -118,8 +122,6 @@ async def collect_usdt_subtotal(update: Update, context: ContextTypes.DEFAULT_TY
         f"`{usdt_wallet}`\n\n"
         "⚠️ *ERC20 ONLY* — sending via other networks will result in loss.\n\n"
         "📌 Send USDT and reply with *TXID only*\n"
-        "Example:\n"
-        "`0x5e8f9c2b9a4a7d1f6c0b3e1a9f0d7c8b2e4a6f9c3d1e8b7a6c5d4e3f2a1b0`\n"
         "or scanner link.\n\n"
         "❌ Do NOT send screenshots or media.",
         parse_mode="Markdown",
@@ -153,7 +155,7 @@ async def collect_usdt_txid(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     txid = extract_txid(message.text or "")
     if not txid:
-        await message.reply_text(
+        await update.message.reply_text(
             "❌ Invalid TXID.\n\n"
             "Send a valid TXID or blockchain scanner link.",
         )
@@ -164,13 +166,16 @@ async def collect_usdt_txid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     payment = context.user_data.get("usdt_payment")
 
     if not order_id or not payment:
-        await update.message.reply_text("❌ Session expired. Please start again.")
+        await update.message.reply_text(
+            "❌ Session expired. Please start again.",
+            parse_mode="Markdown",
+        )
         return ConversationHandler.END
 
     order_service: OrderService = context.bot_data["order_service"]
     admin_service: AdminService = context.bot_data["admin_service"]
 
-    # ✅ Save USDT payment with fee breakdown
+    # ✅ Save USDT payment
     order_service.create_usdt_payment({
         "Order ID": order_id,
         "Subtotal USD": payment["Subtotal USD"],
